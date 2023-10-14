@@ -147,7 +147,7 @@ def drawpiece(pos, num):
     ya = pos[1] * CELLSIZE + OFSY
     xb = xa + CELLSIZE
     yb = ya + CELLSIZE
-    canvas.create_oval(xa, ya, xb, yb, fill="Green", width=2)
+    canvas.create_rectangle(xa, ya, xb, yb, fill="Green", width=2)
 
     if num == TYPE_NONE: return
     d = int(CELLSIZE/10)
