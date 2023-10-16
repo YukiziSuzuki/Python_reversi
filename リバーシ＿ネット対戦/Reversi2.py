@@ -1,5 +1,8 @@
 import tkinter
+import socket
+import threading
 
+PORTNUM = 8000     #ポート番号
 CELLSIZE = 48      #1マスのピクセル数
 FONTSIZE = ("", 24) #フォントサイズの設定
 BOARDW = 8         #盤面の幅
@@ -11,12 +14,14 @@ TYPE_NONE = 255    #駒の種類：なし
 turn = TYPE_BLACK  #手番
 passcnt = 0        #パスの回数
 endflag = False    #終了フラグ
+timelimit = 0      #制限時間
+
 
 board = bytearray(BOARDW * BOARDW) #盤を管理する配列
 
 playtbl = ["黒", "白"] #プレイヤーの表示名
 colortbl = ["Black", "White"] #駒の色の配列
-vectable = [
+vectable = [#8方向のベクトルテーブル
     (0,-1), #0:上
     (1,-1), #1:右上
     (1,0),  #2:右
@@ -27,6 +32,68 @@ vectable = [
     (-1,-1) #7:左上
 ]
 
+#手番の表示名
+whotbl = ["(あなた)", "(相手)"]
+
+#タイマー処理（約一秒周期）
+def timerctrl():
+    global myturn, timelimit, endflag
+
+    try:
+        #UDP受信
+        recvdata, fromdata = sock.recvfrom(16)
+        #受信データを変換
+        recvtext = str(recvdata, "utf-8")
+        #相手のIPアドレス
+        ipaddr.set(fromdata[0])
+
+    except socket.timeout: #受信タイムアウト
+        recvtext = " "
+        if timelimit > 0:
+            timelimit -= 1
+            if timelimit <= 0: #制限時間切れの場合
+                canvas.create_text(80, 20, text="Timeout", font=FONTSIZE)
+                endflag = True  #ゲーム終了
+
+    if recvtext == "OK":  #レスポンスを受信
+        timelimit = 0      #制限時間をリセット
+    elif recvtext != "":  #受信データがある場合
+        sendsub("OK")      #レスポンスを送信
+        if recvtext == "start":  #相手が接続要求
+            myturn = TYPE_WHITE  #手番を白に設定
+            initboard()          #盤の初期化
+        elif recvtext =="pass":  #相手がパス
+            #プレイヤー切り替え＆ゲームの判定
+            nextturn()
+            redraw()           #画面全体を再描画 
+        else:                     #相手が駒を置いた場合
+            pos = (int(recvtext[0:1]), int(recvtext[1:2]))
+            confirmpiece(pos, turn)  #駒を確定
+
+    timer = threading.Timer(1, timerctrl)
+    timer.start() #タイマーを開始
+
+
+#データを送信
+def sendsub(sendtext):
+    global timelimita
+    addr = ipaddr.get()  #送信先IPアドレス
+    #送信データ
+    senddata = bytes (sendtext, "utf-8")
+    #UDP送信
+    sock.sendto(senddata, (addr, PORTNUM))
+    if sendtext != "OK":
+        timelimit = 5  #レスポンスの制限時間
+
+
+#開始ボタンクリック時に実行する関数
+def button_click(event):
+    global myturn
+    sendsub("start")    #接続要求を送信
+    myturn = TYPE_BLACK #手番を黒に設定
+    initboard()         #盤の初期化
+
+    
 #盤に書き込み（座標、駒の種類）
 def setpiece(pos, num):
     index = (pos[1] * BOARDW) + pos[0]
@@ -37,9 +104,23 @@ def getpiece(pos):
     index = (pos[1] * BOARDW) + pos[0]
     return board[index]
 
+#接続画面を表示
+def connection():
+    canvas.place_forget() #キャンバスを非表示
+    lab.place(x=130, y=150, width=120, height=20)
+    ent.place(x=250, y=150, width=120, height=20)
+    btn.place(x=220, y=210, width=120, height=60)
+
+
 #盤の初期化
 def initboard():
     global turn, passcnt, endflag
+
+    lab.place_forget() #ラベルを非表示
+    ent.place_forget() #エントリーを非表示
+    btn.place_forget() #ボタンを非表示
+    canvas.place(x=0, y=0) #キャンバスを表示
+
     for y in range(BOARDW):
         for x in range(BOARDW):
             setpiece((x,y), TYPE_NONE)
@@ -61,7 +142,7 @@ def canvas_click(event):
         return
     
     if passcnt > 0:     #パス
-        nextrun()       #プレイヤー切り替え＆ゲームの判定
+        nextturn()       #プレイヤー切り替え＆ゲームの判定
         redraw()        #再描画
         return
     
@@ -72,17 +153,26 @@ def canvas_click(event):
         return    #盤の外なら無効
     if turnablepiece(pos, turn) == 0: 
         return  #駒を置けない場合は無効
+    
+    #石の座標を送信
+    sendsub(str(pos[0])+str(pos[1]))
+    confirmpiece(pos, turn)  #駒を確定
+
+
+#駒を確定（座標、駒の種類）
+def confirmpiece(pos,turn):
     for vectol in range(8): #石を反転
         loopcount = search(pos, vectol, turn)  #探索
         temppos = pos
         for i in range(loopcount):
             temppos = moveposition(temppos, vectol)   #座標を移動
-            setpiece(temppos, turn)   #駒を置き換える
+            setpiece(temppos, turn)    #駒を置き換える
 
     setpiece(pos, turn) #自分の駒を置く
-    nextturn()          #手番を変更
-    redraw()            #再描画
-
+    #プレイヤーの切り替え＆ゲームの判定
+    nextturn()
+    redraw()            #画面全体を再描画
+    
 
 #プレイヤー切り替え＆ゲームの判定
 def nextturn():
@@ -192,13 +282,36 @@ def assist(pos, num2):
 root = tkinter.Tk()               #メインウィンドウを作成
 root.title("オセロ")              #メインウィンドウのタイトルを変更
 root.geometry("576x480")          #メインウィンドウのサイズを変更
+
+#Labelウィジェットを作成
+lab = tkinter.Label(root, text = "相手のIPアドレス")
+
+#ウィジェット変数を作成
+ipaddr = tkinter.StringVar()
+ipaddr.set("192.168.x.x")  #IPアドレスを格納
+
+#Entryウィジェットを作成
+ent = tkinter.Entry(root, textvariable=ipaddr)
+
+#Buttonウィジェットを作成
+btn = tkinter.Button(root, text="開始")
+btn.bind("<Button-1>", button_click)
+
 #メインウィンドウのキャンバスを作成
 canvas = tkinter.Canvas(root, width=576, height=480)
-canvas.pack()                     #メインウィンドウのキャンバスを配置
 
 #クリックイベントが発生した時に実行する関数を登録
 canvas.bind("<Button-1>", canvas_click)
-initboard()                       #盤の初期化
+connection()                      #接続画面を表示
+
+#ネットワークを初期化
+sock =socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("", PORTNUM))
+#スレッドを作成
+thread = threading.Thread(target = timerctrl)
+thread.daemon = True
+thread.start() #スレッドを開始
+
 root.mainloop()                   #メインループ
 
 
